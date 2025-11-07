@@ -1,0 +1,602 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>FPS Game Tester</title>
+    <style>
+        body {
+            margin: 0;
+            overflow: hidden;
+            font-family: Arial, sans-serif;
+            background: #000;
+        }
+        #canvas {
+            display: block;
+            background: #87CEEB;
+        }
+        #ui {
+            position: absolute;
+            top: 20px;
+            left: 20px;
+            color: white;
+            text-shadow: 2px 2px 4px rgba(0, 0, 0, 0.8);
+            font-size: 18px;
+            pointer-events: none;
+            z-index: 100;
+        }
+        #crosshair {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            width: 20px;
+            height: 20px;
+            pointer-events: none;
+            z-index: 100;
+        }
+        #crosshair::before,
+        #crosshair::after {
+            content: '';
+            position: absolute;
+            background: white;
+        }
+        #crosshair::before {
+            left: 50%;
+            top: 0;
+            width: 2px;
+            height: 100%;
+            transform: translateX(-50%);
+        }
+        #crosshair::after {
+            top: 50%;
+            left: 0;
+            width: 100%;
+            height: 2px;
+            transform: translateY(-50%);
+        }
+        #instructions {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            color: white;
+            text-align: center;
+            background: rgba(0, 0, 0, 0.7);
+            padding: 30px;
+            border-radius: 10px;
+            font-size: 16px;
+            z-index: 200;
+        }
+        #instructions h2 {
+            margin-top: 0;
+        }
+        #instructions.hidden {
+            display: none;
+        }
+    </style>
+</head>
+<body>
+    <canvas id="canvas"></canvas>
+    <div id="ui">
+        <div>Health: <span id="health">100</span></div>
+        <div>Speed: <span id="speed">0.0</span></div>
+        <div>State: <span id="state">Standing</span></div>
+        <div>Position: <span id="position">0, 0, 0</span></div>
+    </div>
+    <div id="crosshair"></div>
+    <div id="instructions">
+        <h2>FPS Game Tester</h2>
+        <p><strong>Click to start</strong></p>
+        <p>WASD - Move</p>
+        <p>Space - Jump</p>
+        <p>Shift - Dash</p>
+        <p>Ctrl - Slide</p>
+        <p>Mouse - Look around</p>
+        <p>ESC - Release mouse</p>
+    </div>
+
+    <script>
+        const canvas = document.getElementById('canvas');
+        const ctx = canvas.getContext('2d');
+        
+        // Set canvas size
+        function resizeCanvas() {
+            canvas.width = window.innerWidth;
+            canvas.height = window.innerHeight;
+        }
+        resizeCanvas();
+        window.addEventListener('resize', resizeCanvas);
+
+        // Game state
+        const gameState = {
+            health: 100,
+            maxHealth: 100,
+            isAlive: true
+        };
+
+        // Movement state
+        const movement = {
+            forward: false,
+            backward: false,
+            left: false,
+            right: false,
+            jump: false,
+            dash: false,
+            slide: false
+        };
+
+        // Player state
+        const player = {
+            x: 0,
+            y: 0,
+            z: 0,
+            height: 1.7,
+            vx: 0,
+            vy: 0,
+            vz: 0,
+            angle: 0,
+            pitch: 0,
+            speed: 5,
+            sprintSpeed: 8,
+            dashSpeed: 15,
+            slideSpeed: 12,
+            jumpForce: 8,
+            wallJumpForce: 10,
+            dashDuration: 0.3,
+            slideDuration: 0.8,
+            dashCooldown: 1.0,
+            slideCooldown: 1.5,
+            isDashing: false,
+            isSliding: false,
+            dashTimer: 0,
+            slideTimer: 0,
+            dashCooldownTimer: 0,
+            slideCooldownTimer: 0,
+            isGrounded: false,
+            canWallJump: false,
+            wallSide: '',
+            gravity: 20,
+            state: 'standing'
+        };
+
+        // World objects
+        const world = {
+            ground: { y: -2 },
+            platforms: [
+                { x: 10, y: 2, z: 0, w: 8, h: 1, d: 8 },
+                { x: -10, y: 4, z: 0, w: 8, h: 1, d: 8 },
+                { x: 0, y: 6, z: 15, w: 8, h: 1, d: 8 },
+                { x: 0, y: 8, z: -15, w: 8, h: 1, d: 8 }
+            ],
+            walls: [
+                { x: -15, y: 0, z: 0, w: 1, h: 20, d: 30 },
+                { x: 15, y: 0, z: 0, w: 1, h: 20, d: 30 }
+            ],
+            enemies: [
+                { x: 5, y: -1, z: 10, health: 100, maxHealth: 100 },
+                { x: -5, y: -1, z: -10, health: 100, maxHealth: 100 },
+                { x: 10, y: -1, z: -5, health: 100, maxHealth: 100 }
+            ]
+        };
+
+        // Pointer lock
+        const instructions = document.getElementById('instructions');
+        let isLocked = false;
+
+        canvas.addEventListener('click', () => {
+            if (!isLocked) {
+                canvas.requestPointerLock();
+            }
+        });
+
+        document.addEventListener('pointerlockchange', () => {
+            isLocked = document.pointerLockElement === canvas;
+            instructions.classList.toggle('hidden', isLocked);
+        });
+
+        // Mouse movement
+        const mouseSensitivity = 0.002;
+
+        document.addEventListener('mousemove', (event) => {
+            if (!isLocked) return;
+
+            player.angle -= event.movementX * mouseSensitivity;
+            player.pitch -= event.movementY * mouseSensitivity;
+            player.pitch = Math.max(-Math.PI / 2, Math.min(Math.PI / 2, player.pitch));
+        });
+
+        // Keyboard input
+        document.addEventListener('keydown', (event) => {
+            switch (event.code) {
+                case 'KeyW': movement.forward = true; break;
+                case 'KeyS': movement.backward = true; break;
+                case 'KeyA': movement.left = true; break;
+                case 'KeyD': movement.right = true; break;
+                case 'Space': 
+                    event.preventDefault();
+                    movement.jump = true; 
+                    break;
+                case 'ShiftLeft':
+                case 'ShiftRight':
+                    movement.dash = true;
+                    break;
+                case 'ControlLeft':
+                case 'ControlRight':
+                    movement.slide = true;
+                    break;
+            }
+        });
+
+        document.addEventListener('keyup', (event) => {
+            switch (event.code) {
+                case 'KeyW': movement.forward = false; break;
+                case 'KeyS': movement.backward = false; break;
+                case 'KeyA': movement.left = false; break;
+                case 'KeyD': movement.right = false; break;
+                case 'Space': movement.jump = false; break;
+                case 'ShiftLeft':
+                case 'ShiftRight':
+                    movement.dash = false;
+                    break;
+                case 'ControlLeft':
+                case 'ControlRight':
+                    movement.slide = false;
+                    break;
+            }
+        });
+
+        // Collision detection
+        function checkGroundCollision() {
+            if (player.y <= world.ground.y + player.height) {
+                return true;
+            }
+            
+            for (const platform of world.platforms) {
+                if (Math.abs(player.x - platform.x) < platform.w / 2 &&
+                    Math.abs(player.z - platform.z) < platform.d / 2 &&
+                    player.y <= platform.y + platform.h / 2 + player.height &&
+                    player.y >= platform.y - platform.h / 2) {
+                    return true;
+                }
+            }
+            
+            return false;
+        }
+
+        function checkWallCollision() {
+            for (const wall of world.walls) {
+                const distX = Math.abs(player.x - wall.x);
+                const distZ = Math.abs(player.z - wall.z);
+                
+                if (distX < wall.w / 2 + 1 &&
+                    distZ < wall.d / 2 &&
+                    player.y > wall.y - wall.h / 2 &&
+                    player.y < wall.y + wall.h / 2) {
+                    if (player.x < wall.x) {
+                        player.wallSide = 'left';
+                    } else {
+                        player.wallSide = 'right';
+                    }
+                    return true;
+                }
+            }
+            return false;
+        }
+
+        // Update player physics
+        function updatePlayer(deltaTime) {
+            // Update cooldowns
+            if (player.dashCooldownTimer > 0) {
+                player.dashCooldownTimer -= deltaTime;
+            }
+            if (player.slideCooldownTimer > 0) {
+                player.slideCooldownTimer -= deltaTime;
+            }
+
+            // Update dash timer
+            if (player.isDashing) {
+                player.dashTimer -= deltaTime;
+                if (player.dashTimer <= 0) {
+                    player.isDashing = false;
+                    player.dashCooldownTimer = player.dashCooldown;
+                }
+            }
+
+            // Update slide timer
+            if (player.isSliding) {
+                player.slideTimer -= deltaTime;
+                if (player.slideTimer <= 0) {
+                    player.isSliding = false;
+                    player.slideCooldownTimer = player.slideCooldown;
+                }
+            }
+
+            // Check collisions
+            player.isGrounded = checkGroundCollision();
+            const nearWall = checkWallCollision();
+            player.canWallJump = nearWall && !player.isGrounded && player.vy < 0;
+
+            // Calculate movement direction
+            let moveX = 0;
+            let moveZ = 0;
+            
+            if (movement.forward) {
+                moveX += Math.sin(player.angle);
+                moveZ += Math.cos(player.angle);
+            }
+            if (movement.backward) {
+                moveX -= Math.sin(player.angle);
+                moveZ -= Math.cos(player.angle);
+            }
+            if (movement.right) {
+                moveX += Math.cos(player.angle);
+                moveZ -= Math.sin(player.angle);
+            }
+            if (movement.left) {
+                moveX -= Math.cos(player.angle);
+                moveZ += Math.sin(player.angle);
+            }
+
+            const moveLen = Math.sqrt(moveX * moveX + moveZ * moveZ);
+            if (moveLen > 0) {
+                moveX /= moveLen;
+                moveZ /= moveLen;
+            }
+
+            // Determine current speed and state
+            let currentSpeed = player.speed;
+            player.state = 'standing';
+
+            if (player.isDashing) {
+                currentSpeed = player.dashSpeed;
+                player.state = 'dashing';
+            } else if (player.isSliding) {
+                currentSpeed = player.slideSpeed;
+                player.state = 'sliding';
+            } else if (moveLen > 0) {
+                player.state = 'moving';
+            }
+
+            // Dash
+            if (movement.dash && !player.isDashing && player.dashCooldownTimer <= 0 && player.isGrounded) {
+                player.isDashing = true;
+                player.dashTimer = player.dashDuration;
+                const dashDirX = moveLen > 0 ? moveX : Math.sin(player.angle);
+                const dashDirZ = moveLen > 0 ? moveZ : Math.cos(player.angle);
+                player.vx = dashDirX * player.dashSpeed;
+                player.vz = dashDirZ * player.dashSpeed;
+            }
+
+            // Slide
+            if (movement.slide && !player.isSliding && player.slideCooldownTimer <= 0 && player.isGrounded) {
+                player.isSliding = true;
+                player.slideTimer = player.slideDuration;
+                const slideDirX = moveLen > 0 ? moveX : Math.sin(player.angle);
+                const slideDirZ = moveLen > 0 ? moveZ : Math.cos(player.angle);
+                player.vx = slideDirX * player.slideSpeed;
+                player.vz = slideDirZ * player.slideSpeed;
+            }
+
+            // Apply movement (if not dashing or sliding)
+            if (!player.isDashing && !player.isSliding) {
+                player.vx = moveX * currentSpeed;
+                player.vz = moveZ * currentSpeed;
+            }
+
+            // Jump
+            if (movement.jump && player.isGrounded && !player.isDashing) {
+                player.vy = player.jumpForce;
+                player.state = 'jumping';
+            }
+
+            // Wall jump
+            if (movement.jump && player.canWallJump) {
+                player.vy = player.wallJumpForce;
+                // Push away from wall
+                if (player.wallSide === 'left') {
+                    player.vx = -player.speed;
+                } else {
+                    player.vx = player.speed;
+                }
+                player.canWallJump = false;
+                player.state = 'wall jumping';
+            }
+
+            // Apply gravity
+            if (!player.isGrounded) {
+                player.vy -= player.gravity * deltaTime;
+                if (player.state === 'standing' || player.state === 'moving') {
+                    player.state = 'in air';
+                }
+            } else {
+                if (player.vy < 0) {
+                    player.vy = 0;
+                    player.y = world.ground.y + player.height;
+                }
+            }
+
+            // Update position
+            player.x += player.vx * deltaTime;
+            player.y += player.vy * deltaTime;
+            player.z += player.vz * deltaTime;
+
+            // Keep player above ground
+            if (player.y < world.ground.y + player.height) {
+                player.y = world.ground.y + player.height;
+                player.vy = 0;
+            }
+
+            // Simple boundary
+            player.x = Math.max(-50, Math.min(50, player.x));
+            player.z = Math.max(-50, Math.min(50, player.z));
+        }
+
+        // 3D Projection
+        function project3D(x, y, z) {
+            // Translate relative to player
+            const dx = x - player.x;
+            const dy = y - player.y;
+            const dz = z - player.z;
+
+            // Rotate around Y axis (player angle)
+            const cosA = Math.cos(-player.angle);
+            const sinA = Math.sin(-player.angle);
+            const rx = dx * cosA - dz * sinA;
+            const rz = dx * sinA + dz * cosA;
+
+            // Rotate around X axis (player pitch)
+            const cosP = Math.cos(-player.pitch);
+            const sinP = Math.sin(-player.pitch);
+            const ry = dy * cosP - rz * sinP;
+            const rz2 = dy * sinP + rz * cosP;
+
+            // Perspective projection
+            const fov = 500;
+            if (rz2 > 0.1) {
+                const scale = fov / rz2;
+                return {
+                    x: canvas.width / 2 + rx * scale,
+                    y: canvas.height / 2 - ry * scale,
+                    z: rz2,
+                    visible: true
+                };
+            }
+            return { x: 0, y: 0, z: rz2, visible: false };
+        }
+
+        // Render world
+        function render() {
+            // Clear canvas
+            ctx.fillStyle = '#87CEEB';
+            ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+            // Draw ground
+            ctx.fillStyle = '#228B22';
+            const groundCorners = [
+                { x: -50, y: world.ground.y, z: -50 },
+                { x: 50, y: world.ground.y, z: -50 },
+                { x: 50, y: world.ground.y, z: 50 },
+                { x: -50, y: world.ground.y, z: 50 }
+            ];
+            
+            const projectedGround = groundCorners.map(c => project3D(c.x, c.y, c.z));
+            if (projectedGround.every(p => p.visible)) {
+                ctx.beginPath();
+                ctx.moveTo(projectedGround[0].x, projectedGround[0].y);
+                for (let i = 1; i < projectedGround.length; i++) {
+                    ctx.lineTo(projectedGround[i].x, projectedGround[i].y);
+                }
+                ctx.closePath();
+                ctx.fill();
+            }
+
+            // Draw platforms
+            ctx.fillStyle = '#8B4513';
+            for (const platform of world.platforms) {
+                drawBox(platform.x, platform.y, platform.z, platform.w, platform.h, platform.d);
+            }
+
+            // Draw walls
+            ctx.fillStyle = '#808080';
+            for (const wall of world.walls) {
+                drawBox(wall.x, wall.y, wall.z, wall.w, wall.h, wall.d);
+            }
+
+            // Draw enemies
+            for (const enemy of world.enemies) {
+                const healthPercent = enemy.health / enemy.maxHealth;
+                ctx.fillStyle = `rgb(${255 * (1 - healthPercent)}, ${255 * healthPercent}, 0)`;
+                drawBox(enemy.x, enemy.y, enemy.z, 1.5, 2, 1.5);
+                
+                // Health bar
+                const pos = project3D(enemy.x, enemy.y + 1.5, enemy.z);
+                if (pos.visible && pos.z < 30) {
+                    ctx.fillStyle = 'rgba(0, 0, 0, 0.5)';
+                    ctx.fillRect(pos.x - 20, pos.y - 10, 40, 6);
+                    ctx.fillStyle = healthPercent > 0.5 ? '#00FF00' : healthPercent > 0.25 ? '#FFFF00' : '#FF0000';
+                    ctx.fillRect(pos.x - 20, pos.y - 10, 40 * healthPercent, 6);
+                }
+            }
+        }
+
+        // Draw a 3D box
+        function drawBox(cx, cy, cz, w, h, d) {
+            const hw = w / 2;
+            const hh = h / 2;
+            const hd = d / 2;
+
+            const vertices = [
+                { x: cx - hw, y: cy - hh, z: cz - hd },
+                { x: cx + hw, y: cy - hh, z: cz - hd },
+                { x: cx + hw, y: cy + hh, z: cz - hd },
+                { x: cx - hw, y: cy + hh, z: cz - hd },
+                { x: cx - hw, y: cy - hh, z: cz + hd },
+                { x: cx + hw, y: cy - hh, z: cz + hd },
+                { x: cx + hw, y: cy + hh, z: cz + hd },
+                { x: cx - hw, y: cy + hh, z: cz + hd }
+            ];
+
+            const projected = vertices.map(v => project3D(v.x, v.y, v.z));
+
+            // Draw faces
+            const faces = [
+                [0, 1, 2, 3], // front
+                [5, 4, 7, 6], // back
+                [4, 0, 3, 7], // left
+                [1, 5, 6, 2], // right
+                [3, 2, 6, 7], // top
+                [4, 5, 1, 0]  // bottom
+            ];
+
+            for (const face of faces) {
+                const faceProjected = face.map(i => projected[i]);
+                if (faceProjected.some(p => p.visible)) {
+                    ctx.beginPath();
+                    ctx.moveTo(faceProjected[0].x, faceProjected[0].y);
+                    for (let i = 1; i < faceProjected.length; i++) {
+                        ctx.lineTo(faceProjected[i].x, faceProjected[i].y);
+                    }
+                    ctx.closePath();
+                    ctx.fill();
+                    ctx.strokeStyle = 'rgba(0, 0, 0, 0.3)';
+                    ctx.stroke();
+                }
+            }
+        }
+
+        // Update UI
+        function updateUI() {
+            document.getElementById('health').textContent = Math.round(gameState.health);
+            
+            const speed = Math.sqrt(player.vx ** 2 + player.vz ** 2);
+            document.getElementById('speed').textContent = speed.toFixed(1);
+            
+            document.getElementById('state').textContent = player.state;
+            
+            document.getElementById('position').textContent = 
+                `${player.x.toFixed(1)}, ${player.y.toFixed(1)}, ${player.z.toFixed(1)}`;
+        }
+
+        // Animation loop
+        let lastTime = performance.now();
+
+        function animate() {
+            requestAnimationFrame(animate);
+
+            const currentTime = performance.now();
+            const deltaTime = Math.min((currentTime - lastTime) / 1000, 0.1);
+            lastTime = currentTime;
+
+            if (isLocked) {
+                updatePlayer(deltaTime);
+            }
+
+            render();
+            updateUI();
+        }
+
+        animate();
+    </script>
+</body>
+</html>
